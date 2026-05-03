@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (ignored by git; only non-sensitive config)
+# aws_region   = "us-east-1"
+# github_org   = "sydlab"
+# github_repo  = "aws-dev-shutdown"
+#
+# IAM allows StopInstances only when these tags match the instance — use the same values as
+# GitHub Actions Variables TARGET_TAG_KEY / TARGET_TAG_VALUE (defaults below).
+# target_tag_key   = "AutoShutdown"
+# target_tag_value = "true"

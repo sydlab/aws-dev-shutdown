@@ -1,0 +1,144 @@
+# Stops tagged dev EC2 instances (see scripts/shutdown.py). Default: DRY_RUN=true.
+#
+# Secrets:
+#   SLACK_WEBHOOK_URL — Incoming Webhook for #infra-aws (optional; skipped if unset)
+#   AWS_ROLE_ARN — IAM role for OIDC from terraform/ output github_actions_role_arn
+#
+# To use access keys instead of OIDC, replace the "Configure AWS" step with:
+#   aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#   aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+# and remove `role-to-assume`.
+
+name: AWS dev shutdown
+
+on:
+  schedule:
+    # Every 12 hours at 00:00 and 12:00 UTC (GitHub may start a few minutes late).
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "If true, only report instances that would be stopped"
+        type: boolean
+        default: true
+      max_age_hours:
+        description: "Stop running instances older than this many hours"
+        type: string
+        default: "8"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  shutdown:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute run environment
+        run: |
+          echo "AWS_REGION=${{ env.AWS_REGION }}" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "MAX_AGE_HOURS=${{ github.event.inputs.max_age_hours }}" >> "$GITHUB_ENV"
+            case "${{ github.event.inputs.dry_run }}" in
+              true|True) echo "DRY_RUN=true" >> "$GITHUB_ENV" ;;
+              *) echo "DRY_RUN=false" >> "$GITHUB_ENV" ;;
+            esac
+          else
+            echo "MAX_AGE_HOURS=${{ vars.MAX_AGE_HOURS || '8' }}" >> "$GITHUB_ENV"
+            echo "DRY_RUN=${{ vars.DRY_RUN || 'true' }}" >> "$GITHUB_ENV"
+          fi
+          echo "TARGET_TAG_KEY=${{ vars.TARGET_TAG_KEY || 'AutoShutdown' }}" >> "$GITHUB_ENV"
+          echo "TARGET_TAG_VALUE=${{ vars.TARGET_TAG_VALUE || 'true' }}" >> "$GITHUB_ENV"
+
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run shutdown script
+        id: run
+        run: |
+          set +e
+          python scripts/shutdown.py > outcome.json 2> stderr.txt
+          CODE=$?
+          cat outcome.json
+          if [ $CODE -ne 0 ]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            echo "err<<ERR" >> "$GITHUB_OUTPUT"
+            cat stderr.txt >> "$GITHUB_OUTPUT"
+            echo "ERR" >> "$GITHUB_OUTPUT"
+            exit $CODE
+          fi
+          echo "failed=false" >> "$GITHUB_OUTPUT"
+          SUMMARY=$(python - <<'PY'
+          import json
+          with open("outcome.json") as f:
+              d = json.load(f)
+          dr = d.get("dry_run", True)
+          n = d.get("count", 0)
+          ids = d.get("would_stop") or d.get("stopped") or []
+          parts = [f"dry_run={dr}", f"count={n}"]
+          if ids:
+              tail = ids[:15]
+              extra = " …" if len(ids) > 15 else ""
+              parts.append("instances: " + ", ".join(tail) + extra)
+          print(" | ".join(parts))
+          PY
+          )
+          {
+            echo "summary<<EOF"
+            echo "$SUMMARY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Slack notify
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL not set; skipping Slack."
+            exit 0
+          fi
+          STATUS="${{ job.status }}"
+          SUMMARY="${{ steps.run.outputs.summary }}"
+          ERR="${{ steps.run.outputs.err }}"
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "$STATUS" = "success" ]; then
+            EMOJI=":white_check_mark:"
+          else
+            EMOJI=":x:"
+          fi
+          TEXT="$EMOJI *AWS dev shutdown* — \`$REPO\`
+          • Status: \`$STATUS\`
+          • $SUMMARY"
+          if [ "${{ steps.run.outputs.failed }}" = "true" ] && [ -n "$ERR" ]; then
+            TEXT="$TEXT
+          • Error:
+          \`\`\`
+          $ERR
+          \`\`\`"
+          fi
+          TEXT="$TEXT
+          • <$RUN_URL|Open workflow run>"
+          jq -n --arg text "$TEXT" '{text: $text}' | curl -sS -f -X POST \
+            -H 'Content-type: application/json' \
+            --data @- "$SLACK_WEBHOOK_URL"
