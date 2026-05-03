@@ -2,6 +2,8 @@
 
 Scheduled **development** AWS cost control: stop (or optionally terminate) tagged EC2 instances that have been running longer than a threshold. Orchestrated by **GitHub Actions** every 12 hours, with **Slack** notifications for `#infra-aws`.
 
+**Branches:** **`main`** is documentation only (this README). **`dev`** contains `.github/workflows/`, `scripts/`, Terraform, and tooling. Scheduled workflows expect the **repository default branch to be `dev`** (GitHub runs `schedule` workflows from the default branch only).
+
 > **Safety:** Defaults to **dry-run**. Only tagged resources are candidates. Use a **sandbox account** or strict tag policy; never tag production workloads with `AutoShutdown=true`.
 
 ## What it does
@@ -20,15 +22,17 @@ Scheduled **development** AWS cost control: stop (or optionally terminate) tagge
 
 ## Create the GitHub repository
 
+Clone with the automation branch (**`dev`**), set it as **default branch** under Settings → General (required for cron schedules).
+
 From your machine (replace the path if you moved the folder):
 
 ```bash
 cd ~/tech/repos/aws-dev-shutdown   # or your clone path
-git init -b main
-git add -A
-git commit -m "Initial commit: scheduled dev EC2 shutdown + Slack"
-gh repo create sydlab/aws-dev-shutdown --public --source=. --remote=origin --push
+git checkout dev
+git remote add origin https://github.com/sydlab/aws-dev-shutdown.git   # replace if different
+git push -u origin main && git push -u origin dev
 ```
+
 
 If you use a different repo name, update `github_repo` in `terraform/variables.tf` (or `terraform.tfvars`) so the OIDC trust matches `repo:sydlab/<name>:*`.
 
