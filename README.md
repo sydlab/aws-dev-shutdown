@@ -2,7 +2,7 @@
 
 Scheduled **development** AWS cost control: stop (or optionally terminate) tagged EC2 instances that have been running longer than a threshold. Orchestrated by **GitHub Actions** every 12 hours, with **Slack** notifications for `#infra-aws`.
 
-**Branches:** **`main`** is documentation only (this README). **`dev`** contains `.github/workflows/`, `scripts/`, Terraform, and tooling. Scheduled workflows expect the **repository default branch to be `dev`** (GitHub runs `schedule` workflows from the default branch only).
+**Branches:** **`main`** holds documentation-only README. **`dev`** (this branch) has workflows, code, and Terraform. Set **`dev`** as the **repository default branch** so scheduled Actions run (`schedule` workflows use the default branch only).
 
 > **Safety:** Defaults to **dry-run**. Only tagged resources are candidates. Use a **sandbox account** or strict tag policy; never tag production workloads with `AutoShutdown=true`.
 
@@ -20,18 +20,19 @@ Scheduled **development** AWS cost control: stop (or optionally terminate) tagge
 | `scripts/shutdown.py` | Boto3 logic |
 | `terraform/` | Optional: GitHub OIDC → IAM role (no long-lived AWS keys in GitHub) |
 
-## Create the GitHub repository
+## Create / clone this repository
 
-Clone with the automation branch (**`dev`**), set it as **default branch** under Settings → General (required for cron schedules).
+**New repo:** create `sydlab/aws-dev-shutdown` (adjust org/name), push both **`main`** and **`dev`**, then set **default branch → `dev`**.
 
-From your machine (replace the path if you moved the folder):
+From your clone (already on **`dev`** for workflows):
 
 ```bash
-cd ~/tech/repos/aws-dev-shutdown   # or your clone path
-git checkout dev
 git remote add origin https://github.com/sydlab/aws-dev-shutdown.git   # replace if different
-git push -u origin main && git push -u origin dev
+git push -u origin main
+git push -u origin dev
 ```
+
+After the first push, in GitHub: **Settings → General → Default branch → `dev`**.
 
 
 If you use a different repo name, update `github_repo` in `terraform/variables.tf` (or `terraform.tfvars`) so the OIDC trust matches `repo:sydlab/<name>:*`.
